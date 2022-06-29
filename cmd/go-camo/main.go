@@ -146,6 +146,7 @@ func main() {
 		SSLKey              string        `long:"ssl-key" description:"ssl private key (key.pem) path"`
 		SSLCert             string        `long:"ssl-cert" description:"ssl cert (cert.pem) path"`
 		MaxSize             int64         `long:"max-size" description:"Max allowed response size (KB)"`
+		MaxSizeRedirect     string        `long:"max-size-redirect" description:"URL to redirect when max-size is exceeded"`
 		ReqTimeout          time.Duration `long:"timeout" default:"4s" description:"Upstream request timeout"`
 		MaxRedirects        int           `long:"max-redirects" default:"3" description:"Maximum number of redirects to follow"`
 		Metrics             bool          `long:"metrics" description:"Enable Prometheus compatible metrics endpoint"`
@@ -298,6 +299,15 @@ func main() {
 		// convert from KB to Bytes
 		config.MaxSize = opts.MaxSize * 1024
         }
+
+	if maxSizeRedirect := os.Getenv("GOCAMO_MAXSIZEREDIRECT"); maxSizeRedirect != ""{
+		config.MaxSizeRedirect = maxSizeRedirect
+	}
+	// flags override env var
+	if opts.MaxSizeRedirect != "" {
+		config.MaxSizeRedirect = opts.MaxSizeRedirect
+	}
+
 	config.RequestTimeout = opts.ReqTimeout
 	config.MaxRedirects = opts.MaxRedirects
 	config.ServerName = ServerName

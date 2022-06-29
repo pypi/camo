@@ -36,6 +36,8 @@ type Config struct {
 	ServerName string
 	// MaxSize is the maximum valid image size response (in bytes).
 	MaxSize int64
+	// MaxSizeRedirect is the URL to redirect when MaxSize is exceeded.
+	MaxSizeRedirect string
 	// MaxRedirects is the maximum number of redirects to follow.
 	MaxRedirects int
 	// Request timeout is a timeout for fetching upstream data.
@@ -239,7 +241,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		if mlog.HasDebug() {
 			mlog.Debugm("content length exceeded", mlog.Map{"url": sURL})
 		}
-		http.Error(w, "Content length exceeded", http.StatusNotFound)
+		if p.config.MaxSizeRedirect != "" {
+			http.Redirect(w, req, p.config.MaxSizeRedirect, http.StatusFound)
+		} else {
+			http.Error(w, "Content length exceeded", http.StatusNotFound)
+		}
 		return
 	}
 
