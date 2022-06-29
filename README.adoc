@@ -273,6 +273,7 @@ More generally, it is recommended to either:
 
 *   `GOCAMO_HMAC` - HMAC key to use.
 *   `GOCAMO_MAXSIZE` - Max allowed response size (KB)
+*   `GOCAMO_MAXSIZEREDIRECT` - URL to redirect to when max-size is exceeded.
 *   `HTTPS_PROXY` - Configure an outbound proxy for HTTPS requests. +
     Either a complete URL or a `host[:port]`, in which case an HTTP scheme
     is assumed. See <<Upstream Http Proxying>> notes for more information.
@@ -298,6 +299,7 @@ Application Options:
       --ssl-key=               ssl private key (key.pem) path
       --ssl-cert=              ssl cert (cert.pem) path
       --max-size=              Max allowed response size (KB)
+      --max-size-redirect=     URL to redirect to when max-size is exceeded
       --timeout=               Upstream request timeout (default: 4s)
       --max-redirects=         Maximum number of redirects to follow (default: 3)
       --metrics                Enable Prometheus compatible metrics endpoint
