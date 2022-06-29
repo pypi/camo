@@ -272,6 +272,7 @@ More generally, it is recommended to either:
 === Environment Vars
 
 *   `GOCAMO_HMAC` - HMAC key to use.
+*   `GOCAMO_MAXSIZE` - Max allowed response size (KB)
 *   `HTTPS_PROXY` - Configure an outbound proxy for HTTPS requests. +
     Either a complete URL or a `host[:port]`, in which case an HTTP scheme
     is assumed. See <<Upstream Http Proxying>> notes for more information.

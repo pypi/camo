@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+        "strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -282,8 +283,21 @@ func main() {
 		mlog.SetEmitter(&mlog.FormatWriterJSON{})
 	}
 
-	// convert from KB to Bytes
-	config.MaxSize = opts.MaxSize * 1024
+	if maxSize := os.Getenv("GOCAMO_MAXSIZE"); maxSize != "" {
+		// convert from string to int64
+		maxSize, err := strconv.ParseInt(maxSize, 10, 64)
+		if err != nil {
+			mlog.Fatal("Invalid value for max-size", err)
+		}
+		// convert from KB to Bytes
+                config.MaxSize = maxSize * 1024
+        }
+
+        // flags override env var
+        if opts.MaxSize != 0 {
+		// convert from KB to Bytes
+		config.MaxSize = opts.MaxSize * 1024
+        }
 	config.RequestTimeout = opts.ReqTimeout
 	config.MaxRedirects = opts.MaxRedirects
 	config.ServerName = ServerName
