@@ -10,5 +10,5 @@ RUN apk add --no-cache ca-certificates
 COPY --from=0 /app/build/bin/* /bin/
 
 EXPOSE 8080/tcp
-USER nobody
+#USER nobody
 ENTRYPOINT ["/bin/go-camo"]
