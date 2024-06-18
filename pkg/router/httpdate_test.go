@@ -1,15 +1,21 @@
-// Copyright (c) 2012-2019 Eli Janssen
+// Copyright (c) 2012-2023 Eli Janssen
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
 package router
 
 import (
+	"bytes"
+	"flag"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/cactus/mlog"
 	"gotest.tools/v3/assert"
 )
+
+var logBuffer = &bytes.Buffer{}
 
 func TestHTTPDateGoroutineUpdate(t *testing.T) {
 	t.Parallel()
@@ -50,4 +56,21 @@ func BenchmarkDataString(b *testing.B) {
 			_ = d.String()
 		}
 	})
+}
+
+func TestMain(m *testing.M) {
+	flag.Parse()
+
+	debug := os.Getenv("DEBUG")
+	// now configure a standard logger
+	mlog.SetFlags(mlog.Lstd)
+
+	if debug != "" {
+		mlog.SetFlags(mlog.Flags() | mlog.Ldebug)
+		mlog.Debug("debug logging enabled")
+	}
+
+	mlog.DefaultLogger = mlog.New(logBuffer, mlog.Lstd)
+
+	os.Exit(m.Run())
 }

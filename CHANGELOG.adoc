@@ -19,6 +19,54 @@ toc::[]
 
 == HEAD
 
+== v2.4.13 2024-04-22
+*   Release tagged for arm64 docker building only.
+
+== v2.4.12 2024-04-20
+*   Update library dependencies.
+*   Fix docker and github packages publishing issue.
+
+== v2.4.11 2024-04-03
+*   Update library dependencies.
+*   Build with Go-1.22.2
+
+== v2.4.10 2024-03-17
+*   Update library dependencies.
+
+== v2.4.9 2024-02-16
+*   Minimum Go version now 1.21 due to quic-go dependency, due to better
+    cryto/tls support for QUIC in Go-1.21.
+*   Update library dependencies.
+
+== v2.4.8 2023-12-19
+*   Add `--automaxprocs` flag to set GOMAXPROCS automatically to match Linux
+    container CPU quota/limits.
+*   Update library dependencies.
+
+== v2.4.7 - 2023-11-13
+*   Add http3/quic server support. New flag `--quic`. Requires `--ssl-listen`.
+
+== v2.4.6 - 2023-10-25
+*   Add `--no-debug-vars` flag to disable /debug/vars when `--metrics` is
+    enabled. (#66, #67)
+
+== v2.4.5 - 2023-10-23
+*   fix htrie matching of non punycode (eg. unicode) idna hostnames
+*   slightly faster logging (update to mlog dependency)
+*   address a logging issue with missing url path output in
+    `"built outgoing request"` debug log
+*   moderate improve performance of hostname rule processing
+    (approx 12-30% in microbenchmarks)
+*   slight improvement in request path url processing
+    (approx 2-4% in microbenchmarks)
+*   fix /debug/vars being enabled by default (#65) due to expvars import
+    side effect
+
+== v2.4.4 - 2023-07-25
+*   update dependencies
+*   bump version in go.mod (and fix all internal module references) +
+    ref: discussion link:https://github.com/cactus/go-camo/discussions/62[#62]
+
 == v2.4.3 - 2023-02-18
 *   update library dependency golang.org/x/net. +
     refs:

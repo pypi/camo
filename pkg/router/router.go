@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2019 Eli Janssen
+// Copyright (c) 2012-2023 Eli Janssen
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
@@ -11,9 +11,9 @@ import (
 
 // DumbRouter is a basic, special purpose, http router
 type DumbRouter struct {
-	ServerName  string
 	CamoHandler http.Handler
 	AddHeaders  map[string]string
+	ServerName  string
 }
 
 // SetHeaders sets the headers on the response
@@ -46,10 +46,6 @@ func (dr *DumbRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		dr.HealthCheckHandler(w, r)
 		return
 	}
-        if r.URL.Path == "/_health/" {
-                dr.HealthCheckHandler(w, r)
-                return
-        }
 
 	components := strings.Split(r.URL.Path, "/")
 	if len(components) == 3 {

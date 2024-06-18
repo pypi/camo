@@ -64,8 +64,9 @@ For exmaple, if the HMAC key is provided on the command line, it will override
 *-H*, *--header*=<__HEADER__>::
 +
 --
-Extra header to return for each response. This option can be used
-multiple times to add multiple headers.
+Add additional header to each response.
+This option can be used multiple times to add multiple headers.
+When specified, these headers are set unconditionally on all responses.
 
 See __<<ADD_HEADERS>>__ for more info.
 --
@@ -88,6 +89,12 @@ See __<<ADD_HEADERS>>__ for more info.
     Path to ssl certificate. +
     Default: `cert.pem`
 
+*--quic*::
+    Enable http3/quic. Binds to the same port number as _--ssl-listen_ but udp+quic.
+
+*--automaxprocs*::
+    Set GOMAXPROCS automatically to match Linux container CPU quota/limits.
+
 *--max-size*=<__SIZE__>::
     Max response size allowed in KB. Set to `0` to disable size restriction. +
     Default: `0`
@@ -105,8 +112,17 @@ See __<<ADD_HEADERS>>__ for more info.
 --
 Enable Prometheus compatible metrics endpoint.
 
-If metrics flag is provided, then the service will make a Prometheus
-compatible endpoint available at `/metrics` via HTTP GET.
+If the `metrics` flag is provided, then the service will expose a Prometheus
+`/metrics` endpoint and a `/debug/vars` endpoint from the go `expvar` package.
+
+See __<<METRICS>>__ for more info.
+--
+
+*--no-debug-vars*::
++
+--
+If the `no-debug-vars` flag is provided along with the `metrics` flag, the
+`/debug/vars` endpoint is removed.
 
 See __<<METRICS>>__ for more info.
 --
@@ -196,6 +212,10 @@ systems to gather data.
 
 The endpoint includes all of the default `go_` and `process_`. In addition, a
 number of custom metrics.
+
+A `/debug/vars` endpoint is also included with *--metrics* by default.
+This endpoint returns memstats and some additional data. This endpoint can be
+disabled by additionally supplying the *--no-debug-vars* flag.
 
 .Exposed Camo Metrics
 [%header,cols="<m,<,<.^6"]

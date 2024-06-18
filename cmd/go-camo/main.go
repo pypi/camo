@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2019 Eli Janssen
+// Copyright (c) 2012-2023 Eli Janssen
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
@@ -6,38 +6,40 @@
 package main
 
 import (
-	"bufio"
 	"context"
+	"expvar"
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime"
-        "strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/cactus/go-camo/pkg/camo"
-	"github.com/cactus/go-camo/pkg/htrie"
-	"github.com/cactus/go-camo/pkg/router"
-
+	"github.com/alecthomas/kong"
+	"github.com/cactus/go-camo/v2/pkg/camo"
+	"github.com/cactus/go-camo/v2/pkg/router"
 	"github.com/cactus/mlog"
-	flags "github.com/jessevdk/go-flags"
+
 	"github.com/prometheus/client_golang/prometheus"
+	vcoll "github.com/prometheus/client_golang/prometheus/collectors/version"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/version"
+	"github.com/quic-go/quic-go/http3"
+	"go.uber.org/automaxprocs/maxprocs"
 )
 
 const metricNamespace = "camo"
 
-var (
-	// ServerVersion holds the server version string
-	ServerVersion = "no-version"
+// ServerVersion holds the server version string
+var ServerVersion = "no-version"
 
+var (
+	// configure histograms and counters
 	responseSize = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: metricNamespace,
@@ -66,131 +68,54 @@ var (
 	)
 )
 
-func loadFilterList(fname string) ([]camo.FilterFunc, error) {
-	// #nosec
-	file, err := os.Open(fname)
-	if err != nil {
-		return nil, fmt.Errorf("could not open filter-ruleset file: %s", err)
-	}
-	// #nosec
-	defer file.Close()
-
-	allowFilter := htrie.NewURLMatcher()
-	denyFilter := htrie.NewURLMatcher()
-	hasAllow := false
-	hasDeny := false
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if strings.HasPrefix(line, "allow|") {
-			line = strings.TrimPrefix(line, "allow")
-			err = allowFilter.AddRule(line)
-			if err != nil {
-				break
-			}
-			hasAllow = true
-		} else if strings.HasPrefix(line, "deny|") {
-			line = strings.TrimPrefix(line, "deny")
-			err = denyFilter.AddRule(line)
-			if err != nil {
-				break
-			}
-			hasDeny = true
-		} else {
-			fmt.Println("ignoring line: ", line)
-		}
-
-		err = scanner.Err()
-		if err != nil {
-			break
-		}
-	}
-	if err != nil {
-		return nil, fmt.Errorf("error building filter ruleset: %s", err)
-	}
-
-	// append in order. allow first, then deny filters.
-	// first false value aborts the request.
-	filterFuncs := make([]camo.FilterFunc, 0)
-
-	if hasAllow {
-		filterFuncs = append(filterFuncs, allowFilter.CheckURL)
-	}
-
-	// denyFilter returns true on a match. we want a "false" value to abort processing.
-	// so just wrap and invert the bool.
-	if hasDeny {
-		denyF := func(u *url.URL) bool {
-			return !denyFilter.CheckURL(u)
-		}
-		filterFuncs = append(filterFuncs, denyF)
-	}
-
-	if hasAllow && hasDeny {
-		mlog.Printf("Warning! Allow and Deny rules both supplied. Having Allow rules means anything not matching an allow rule is denied. THEN deny rules are evaluated. Be sure this is what you want!")
-	}
-
-	return filterFuncs, nil
+type CLI struct {
+	HMACKey             string        `name:"key" short:"k" help:"HMAC key"`
+	AddHeaders          []string      `name:"header" short:"H" help:"Add additional header to each response. This option can be used multiple times to add multiple headers."`
+	BindAddress         string        `name:"listen" default:"0.0.0.0:8080" help:"Address:Port to bind to for HTTP"`
+	BindAddressSSL      string        `name:"ssl-listen" help:"Address:Port to bind to for HTTPS/SSL/TLS"`
+	BindSocket          string        `name:"socket-listen" help:"Path for unix domain socket to bind to for HTTP"`
+	EnableQuic          bool          `name:"quic" help:"Enable http3/quic. Binds to the same port number as ssl-listen but udp+quic."`
+	AutoMaxProcs        bool          `name:"automaxprocs" help:"Set GOMAXPROCS automatically to match Linux container CPU quota/limits."`
+	SSLKey              string        `name:"ssl-key" help:"ssl private key (key.pem) path"`
+	SSLCert             string        `name:"ssl-cert" help:"ssl cert (cert.pem) path"`
+	MaxSize             int64         `name:"max-size" help:"Max allowed response size (KB)"`
+	ReqTimeout          time.Duration `name:"timeout" default:"4s" help:"Upstream request timeout"`
+	MaxRedirects        int           `name:"max-redirects" default:"3" help:"Maximum number of redirects to follow"`
+	MaxSizeRedirect     string        `long:"max-size-redirect" description:"URL to redirect when max-size is exceeded"`
+	Metrics             bool          `name:"metrics" help:"Enable Prometheus compatible metrics endpoint"`
+	NoDebugVars         bool          `name:"no-debug-vars" help:"Disable the /debug/vars/ metrics endpoint. This option has no effects when the metrics are not enabled."`
+	NoLogTS             bool          `name:"no-log-ts" help:"Do not add a timestamp to logging"`
+	Profile             bool          `name:"prof" help:"Enable go http profiler endpoint"`
+	LogJson             bool          `name:"log-json" help:"Log in JSON format"`
+	DisableKeepAlivesFE bool          `name:"no-fk" help:"Disable frontend http keep-alive support"`
+	DisableKeepAlivesBE bool          `name:"no-bk" help:"Disable backend http keep-alive support"`
+	AllowContentVideo   bool          `name:"allow-content-video" help:"Additionally allow 'video/*' content"`
+	AllowContentAudio   bool          `name:"allow-content-audio" help:"Additionally allow 'audio/*' content"`
+	AllowCredentialURLs bool          `name:"allow-credential-urls" help:"Allow urls to contain user/pass credentials"`
+	FilterRuleset       string        `name:"filter-ruleset" help:"Text file containing filtering rules (one per line)"`
+	ServerName          string        `name:"server-name" default:"go-camo" help:"Value to use for the HTTP server field"`
+	ExposeServerVersion bool          `name:"expose-server-version" help:"Include the server version in the HTTP server response header"`
+	EnableXFwdFor       bool          `name:"enable-xfwd4" help:"Enable x-forwarded-for passthrough/generation"`
+	Verbose             bool          `name:"verbose" short:"v" help:"Show verbose (debug) log level output"`
+	Version             int           `name:"version" short:"V" type:"counter" help:"Print version and exit; specify twice to show license information."`
 }
 
-func main() {
-	// command line flags
-	var opts struct {
-		HMACKey             string        `short:"k" long:"key" description:"HMAC key"`
-		AddHeaders          []string      `short:"H" long:"header" description:"Add additional header to each response. This option can be used multiple times to add multiple headers"`
-		BindAddress         string        `long:"listen" default:"0.0.0.0:8080" description:"Address:Port to bind to for HTTP"`
-		BindAddressSSL      string        `long:"ssl-listen" description:"Address:Port to bind to for HTTPS/SSL/TLS"`
-		BindSocket          string        `long:"socket-listen" description:"Path for unix domain socket to bind to for HTTP"`
-		SSLKey              string        `long:"ssl-key" description:"ssl private key (key.pem) path"`
-		SSLCert             string        `long:"ssl-cert" description:"ssl cert (cert.pem) path"`
-		MaxSize             int64         `long:"max-size" description:"Max allowed response size (KB)"`
-		MaxSizeRedirect     string        `long:"max-size-redirect" description:"URL to redirect when max-size is exceeded"`
-		ReqTimeout          time.Duration `long:"timeout" default:"4s" description:"Upstream request timeout"`
-		MaxRedirects        int           `long:"max-redirects" default:"3" description:"Maximum number of redirects to follow"`
-		Metrics             bool          `long:"metrics" description:"Enable Prometheus compatible metrics endpoint"`
-		NoLogTS             bool          `long:"no-log-ts" description:"Do not add a timestamp to logging"`
-		LogJson             bool          `long:"log-json" description:"Log in JSON format"`
-		DisableKeepAlivesFE bool          `long:"no-fk" description:"Disable frontend http keep-alive support"`
-		DisableKeepAlivesBE bool          `long:"no-bk" description:"Disable backend http keep-alive support"`
-		AllowContentVideo   bool          `long:"allow-content-video" description:"Additionally allow 'video/*' content"`
-		AllowContentAudio   bool          `long:"allow-content-audio" description:"Additionally allow 'audio/*' content"`
-		AllowCredentialURLs bool          `long:"allow-credential-urls" description:"Allow urls to contain user/pass credentials"`
-		FilterRuleset       string        `long:"filter-ruleset" description:"Text file containing filtering rules (one per line)"`
-		ServerName          string        `long:"server-name" default:"go-camo" description:"Value to use for the HTTP server field"`
-		ExposeServerVersion bool          `long:"expose-server-version" description:"Include the server version in the HTTP server response header"`
-		EnableXFwdFor       bool          `long:"enable-xfwd4" description:"Enable x-forwarded-for passthrough/generation"`
-		Verbose             bool          `short:"v" long:"verbose" description:"Show verbose (debug) log level output"`
-		Version             []bool        `short:"V" long:"version" description:"Print version and exit; specify twice to show license information"`
-	}
-
-	// parse said flags
-	_, err := flags.Parse(&opts)
-	if err != nil {
-		if e, ok := err.(*flags.Error); ok {
-			if e.Type == flags.ErrHelp {
-				os.Exit(0)
-			}
-		}
-		os.Exit(1)
-	}
-
+func (cli *CLI) Run() {
 	// set the server name
-	ServerName := opts.ServerName
+	ServerName := cli.ServerName
 
 	// setup the server response field
-	ServerResponse := opts.ServerName
+	ServerResponse := cli.ServerName
 
 	// expand/override server response value if showing version is desired
-	if opts.ExposeServerVersion {
+	if cli.ExposeServerVersion {
 		ServerResponse = fmt.Sprintf("%s %s", ServerName, ServerVersion)
 	}
 
 	// setup -V version output
-	if len(opts.Version) > 0 {
+	if cli.Version > 0 {
 		fmt.Printf("%s %s (%s,%s-%s)\n", "go-camo", ServerVersion, runtime.Version(), runtime.Compiler, runtime.GOARCH)
-		if len(opts.Version) > 1 {
+		if cli.Version > 1 {
 			fmt.Printf("\n%s\n", strings.TrimSpace(licenseText))
 		}
 		os.Exit(0)
@@ -206,40 +131,44 @@ func main() {
 	}
 
 	// flags override env var
-	if opts.HMACKey != "" {
-		config.HMACKey = []byte(opts.HMACKey)
+	if cli.HMACKey != "" {
+		config.HMACKey = []byte(cli.HMACKey)
 	}
 
 	if len(config.HMACKey) == 0 {
 		mlog.Fatal("HMAC key required")
 	}
 
-	if opts.BindAddress == "" && opts.BindAddressSSL == "" && opts.BindSocket == "" {
+	if cli.BindAddress == "" && cli.BindAddressSSL == "" && cli.BindSocket == "" {
 		mlog.Fatal("One of listen or ssl-listen required")
 	}
 
-	if opts.BindAddressSSL != "" && opts.SSLKey == "" {
+	if cli.BindAddressSSL != "" && cli.SSLKey == "" {
 		mlog.Fatal("ssl-key is required when specifying ssl-listen")
 	}
-	if opts.BindAddressSSL != "" && opts.SSLCert == "" {
+	if cli.BindAddressSSL != "" && cli.SSLCert == "" {
 		mlog.Fatal("ssl-cert is required when specifying ssl-listen")
+	}
+	if cli.EnableQuic && cli.BindAddressSSL == "" {
+		mlog.Fatal("ssl-listen is required when specifying quic")
 	}
 
 	// set keepalive options
-	config.DisableKeepAlivesBE = opts.DisableKeepAlivesBE
-	config.DisableKeepAlivesFE = opts.DisableKeepAlivesFE
+	config.DisableKeepAlivesBE = cli.DisableKeepAlivesBE
+	config.DisableKeepAlivesFE = cli.DisableKeepAlivesFE
 
 	// other options
-	config.EnableXFwdFor = opts.EnableXFwdFor
-	config.AllowCredentialURLs = opts.AllowCredentialURLs
+	config.EnableXFwdFor = cli.EnableXFwdFor
+	config.AllowCredentialURLs = cli.AllowCredentialURLs
 
 	// additional content types to allow
-	config.AllowContentVideo = opts.AllowContentVideo
-	config.AllowContentAudio = opts.AllowContentAudio
+	config.AllowContentVideo = cli.AllowContentVideo
+	config.AllowContentAudio = cli.AllowContentAudio
 
 	var filters []camo.FilterFunc
-	if opts.FilterRuleset != "" {
-		filters, err = loadFilterList(opts.FilterRuleset)
+	if cli.FilterRuleset != "" {
+		var err error
+		filters, err = loadFilterList(cli.FilterRuleset)
 		if err != nil {
 			mlog.Fatal("Could not read filter-ruleset", err)
 		}
@@ -252,7 +181,8 @@ func main() {
 		"Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'",
 	}
 
-	for _, v := range opts.AddHeaders {
+	for _, v := range cli.AddHeaders {
+		fmt.Println(v)
 		s := strings.SplitN(v, ":", 2)
 		if len(s) != 2 {
 			mlog.Printf("ignoring bad header: '%s'", v)
@@ -271,49 +201,38 @@ func main() {
 
 	// now configure a standard logger
 	mlog.SetFlags(mlog.Lstd)
-	if opts.NoLogTS {
+	if cli.NoLogTS {
 		mlog.SetFlags(mlog.Flags() ^ mlog.Ltimestamp)
 	}
 
-	if opts.Verbose {
+	if cli.Verbose {
 		mlog.SetFlags(mlog.Flags() | mlog.Ldebug)
 		mlog.Debug("debug logging enabled")
 	}
 
-	if opts.LogJson {
+	if cli.AutoMaxProcs {
+		// #nosec G104
+		maxprocs.Set(
+			maxprocs.Logger(mlog.Infof),
+			// uncomment once gomaxprocs has a new release, as this fixes
+			// https://github.com/uber-go/automaxprocs/issues/78 and similar.
+		// maxprocs.RoundQuotaFunc(func(v float64) int { return int(math.Ceil(v)) }),
+		)
+	}
+
+	if cli.LogJson {
 		mlog.SetEmitter(&mlog.FormatWriterJSON{})
 	}
 
-	if maxSize := os.Getenv("GOCAMO_MAXSIZE"); maxSize != "" {
-		// convert from string to int64
-		maxSize, err := strconv.ParseInt(maxSize, 10, 64)
-		if err != nil {
-			mlog.Fatal("Invalid value for max-size", err)
-		}
-		// convert from KB to Bytes
-                config.MaxSize = maxSize * 1024
-        }
-
-        // flags override env var
-        if opts.MaxSize != 0 {
-		// convert from KB to Bytes
-		config.MaxSize = opts.MaxSize * 1024
-        }
-
-	if maxSizeRedirect := os.Getenv("GOCAMO_MAXSIZEREDIRECT"); maxSizeRedirect != ""{
-		config.MaxSizeRedirect = maxSizeRedirect
-	}
-	// flags override env var
-	if opts.MaxSizeRedirect != "" {
-		config.MaxSizeRedirect = opts.MaxSizeRedirect
-	}
-
-	config.RequestTimeout = opts.ReqTimeout
-	config.MaxRedirects = opts.MaxRedirects
+	// convert from KB to Bytes
+	config.MaxSize = cli.MaxSize * 1024
+	config.RequestTimeout = cli.ReqTimeout
+	config.MaxRedirects = cli.MaxRedirects
+        config.MaxSizeRedirect = cli.MaxSizeRedirect
 	config.ServerName = ServerName
 
 	// configure metrics collection in camo
-	if opts.Metrics {
+	if cli.Metrics {
 		config.CollectMetrics = true
 	}
 
@@ -328,10 +247,11 @@ func main() {
 		CamoHandler: proxy,
 	}
 
+	mux := http.NewServeMux()
+
 	// configure router endpoint for rendering metrics
-	if opts.Metrics {
+	if cli.Metrics {
 		mlog.Printf("Enabling metrics at /metrics")
-		http.Handle("/metrics", promhttp.Handler())
 		// Register a version info metric.
 		verOverride := os.Getenv("APP_INFO_VERSION")
 		if verOverride != "" {
@@ -342,17 +262,64 @@ func main() {
 		version.Revision = os.Getenv("APP_INFO_REVISION")
 		version.Branch = os.Getenv("APP_INFO_BRANCH")
 		version.BuildDate = os.Getenv("APP_INFO_BUILD_DATE")
-		prometheus.MustRegister(version.NewCollector(metricNamespace))
+		prometheus.MustRegister(vcoll.NewCollector(metricNamespace))
+
 		// Wrap the dumb router in instrumentation.
 		router = promhttp.InstrumentHandlerDuration(responseDuration, router)
 		router = promhttp.InstrumentHandlerCounter(responseCount, router)
 		router = promhttp.InstrumentHandlerResponseSize(responseSize, router)
+
+		// also configure expvars. this is usually a side effect of importing
+		// exvar, as it auto-adds it to the default servemux. Since we want
+		// to avoid it being available that when metrics is not enabled, we add
+		// it in manually only if metrics IS enabled.
+		if !cli.NoDebugVars {
+			mux.Handle("/debug/vars", expvar.Handler())
+		}
+		mux.Handle("/metrics", promhttp.Handler())
 	}
 
-	http.Handle("/", router)
+	if cli.Profile {
+		mlog.Printf("Enabling cpu profile at /debug/pprof")
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		// mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		// mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		// mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	}
 
-	srv := &http.Server{
-		ReadTimeout: 30 * time.Second,
+	mux.Handle("/", router)
+
+	var httpSrv *http.Server
+	var tlsSrv *http.Server
+	var quicSrv *http3.Server
+
+	if cli.BindAddress != "" {
+		httpSrv = &http.Server{
+			Addr:        cli.BindAddress,
+			ReadTimeout: 30 * time.Second,
+			Handler:     mux,
+		}
+	}
+
+	if cli.BindAddressSSL != "" {
+		tlsSrv = &http.Server{
+			Addr:        cli.BindAddressSSL,
+			ReadTimeout: 30 * time.Second,
+			Handler:     mux,
+		}
+
+		if cli.EnableQuic {
+			quicSrv = &http3.Server{
+				Addr:    cli.BindAddressSSL,
+				Handler: mux,
+			}
+			// wrap default mux to set some default quic reference headers on tls responses
+			tlsSrv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				quicSrv.SetQUICHeaders(w.Header()) // #nosec G104 - ignore error. should only happen if server.Port isn't discoverable
+				mux.ServeHTTP(w, r)
+			})
+		}
 	}
 
 	idleConnsClosed := make(chan struct{})
@@ -362,64 +329,78 @@ func main() {
 		signal.Notify(sigint, os.Interrupt, syscall.SIGTERM)
 		s := <-sigint
 		mlog.Info("Handling signal:", s)
-
 		mlog.Info("Starting graceful shutdown")
 
-		d := time.Now().Add(200 * time.Millisecond)
-		ctx, cancel := context.WithDeadline(context.Background(), d)
+		closeWait := 200 * time.Millisecond
 
-		if err := srv.Shutdown(ctx); err != nil {
-			mlog.Info("Error gracefully shutting down server:", err)
-		}
-		// Even though ctx may be expired, it is good practice to call its
+		ctx, cancel := context.WithTimeout(context.Background(), closeWait)
+		// Even though ctx may be expired by then, it is good practice to call its
 		// cancellation function in any case. Failure to do so may keep the
 		// context and its parent alive longer than necessary.
-		cancel()
+		defer cancel()
+		if httpSrv != nil {
+			if err := httpSrv.Shutdown(ctx); err != nil {
+				mlog.Info("Error gracefully shutting down HTTP server:", err)
+			}
+		}
+
+		ctx, cancel = context.WithTimeout(context.Background(), closeWait)
+		defer cancel()
+		if tlsSrv != nil {
+			if err := tlsSrv.Shutdown(ctx); err != nil {
+				mlog.Info("Error gracefully shutting down HTTP/TLS server:", err)
+			}
+		}
+
+		if quicSrv != nil {
+			if err := quicSrv.CloseGracefully(closeWait); err != nil {
+				mlog.Info("Error gracefully shutting down HTTP3/QUIC server:", err)
+			}
+		}
 
 		close(idleConnsClosed)
 	}()
 
-	if opts.BindSocket != "" {
-		if _, err := os.Stat(opts.BindSocket); err == nil {
+	if cli.BindSocket != "" {
+		if _, err := os.Stat(cli.BindSocket); err == nil {
 			mlog.Fatal("Cannot bind to unix socket, file aready exists.")
 		}
 
-		mlog.Printf("Starting HTTP server on: unix:%s", opts.BindSocket)
+		mlog.Printf("Starting HTTP server on: unix:%s", cli.BindSocket)
 		go func() {
-			ln, err := net.Listen("unix", opts.BindSocket)
+			ln, err := net.Listen("unix", cli.BindSocket)
 			if err != nil {
 				mlog.Fatal("Error listening on unix socket", err)
 			}
 
-			if err := srv.Serve(ln); err != http.ErrServerClosed {
+			if err := httpSrv.Serve(ln); err != http.ErrServerClosed {
 				mlog.Fatal(err)
 			}
 		}()
 	}
 
-	if opts.BindAddress != "" {
-		mlog.Printf("Starting HTTP server on: tcp:%s", opts.BindAddress)
+	if httpSrv != nil {
+		mlog.Printf("Starting HTTP server on: tcp:%s", cli.BindAddress)
 		go func() {
-			ln, err := net.Listen("tcp", opts.BindAddress)
-			if err != nil {
-				mlog.Fatal("Error listening on tcp socket", err)
-			}
-
-			if err := srv.Serve(ln); err != http.ErrServerClosed {
+			if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
 				mlog.Fatal(err)
 			}
 		}()
 	}
 
-	if opts.BindAddressSSL != "" {
-		mlog.Printf("Starting TLS server on: tcp:%s", opts.BindAddressSSL)
+	if tlsSrv != nil {
+		mlog.Printf("Starting HTTP/TLS server on: tcp:%s", cli.BindAddressSSL)
 		go func() {
-			ln, err := net.Listen("tcp", opts.BindAddressSSL)
-			if err != nil {
-				mlog.Fatal("Error listening on tcp socket", err)
+			if err := tlsSrv.ListenAndServeTLS(cli.SSLCert, cli.SSLKey); err != http.ErrServerClosed {
+				mlog.Fatal(err)
 			}
+		}()
+	}
 
-			if err := srv.ServeTLS(ln, opts.SSLCert, opts.SSLKey); err != http.ErrServerClosed {
+	if quicSrv != nil {
+		mlog.Printf("Starting HTTP3/QUIC server on: udp:%s", cli.BindAddressSSL)
+		go func() {
+			if err := quicSrv.ListenAndServeTLS(cli.SSLCert, cli.SSLKey); err != http.ErrServerClosed {
 				mlog.Fatal(err)
 			}
 		}()
@@ -427,4 +408,15 @@ func main() {
 
 	// just block waiting for closure
 	<-idleConnsClosed
+}
+
+func main() {
+	cli := CLI{}
+	_ = kong.Parse(&cli,
+		kong.Name("go-camo"),
+		kong.Description("An image proxy that proxies non-secure images over SSL/TLS"),
+		kong.UsageOnError(),
+		kong.Vars{"version": ServerVersion},
+	)
+	cli.Run()
 }

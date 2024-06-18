@@ -9,38 +9,48 @@ SIGN_KEY          ?= ${HOME}/.minisign/go-camo.key
 # app specific info
 APP_NAME          := go-camo
 APP_VER           := $(shell git describe --always --tags|sed 's/^v//')
+GOPATH            := $(shell go env GOPATH)
 VERSION_VAR       := main.ServerVersion
 
 # flags and build configuration
 GOBUILD_OPTIONS   := -trimpath
 GOTEST_FLAGS      := -cpu=1,2
+GOTEST_BENCHFLAGS :=
 GOBUILD_DEPFLAGS  := -tags netgo
 GOBUILD_LDFLAGS   ?= -s -w
 GOBUILD_FLAGS     := ${GOBUILD_DEPFLAGS} ${GOBUILD_OPTIONS} -ldflags "${GOBUILD_LDFLAGS} -X ${VERSION_VAR}=${APP_VER}"
 
 # cross compile defs
-CC_BUILD_ARCHES    = darwin/amd64 darwin/arm64 freebsd/amd64 linux/amd64 linux/arm64 windows/amd64
+CC_BUILD_TARGETS   = go-camo url-tool
+CC_BUILD_ARCHES    = darwin/arm64 freebsd/amd64 linux/amd64 linux/arm64 windows/amd64
 CC_OUTPUT_TPL     := ${BUILDDIR}/bin/{{.Dir}}.{{.OS}}-{{.Arch}}
 
 # some exported vars (pre-configure go build behavior)
 export GO111MODULE=on
 export CGO_ENABLED=0
+## enable go 1.21 loopvar "experiment"
+export GOEXPERIMENT=loopvar
 
 define HELP_OUTPUT
 Available targets:
-  help                this help
+* help                this help (default target)
   clean               clean up
-  all                 build binaries and man pages
+  check               run checks and validators
   test                run tests
   cover               run tests with cover output
+  bench               run benchmarks
   build               build all binaries
   man                 build all man pages
-  tar                 build release tarball
-  cross-tar           cross compile and build release tarballs
+  all                 build binaries and man pages
+  tar                 build release tarball for host platform only
+  cross-tar           cross compile and build release tarballs for all platforms
+  release-sign        sign release tarballs with minisign
+  release             build and sign release
+  update-go-deps      updates go.mod and go.sum files
 endef
 export HELP_OUTPUT
 
-.PHONY: help clean build test cover man man-copy all tar cross-tar
+.PHONY: help clean build test cover bench man man-copy all tar cross-tar setup-check
 
 help:
 	@echo "$$HELP_OUTPUT"
@@ -50,13 +60,16 @@ clean:
 
 setup:
 
-setup-gox:
-	@if [ -z "$(shell which gox)" ]; then \
-		echo "* 'gox' command not found."; \
-		echo "  install (or otherwise ensure presence in PATH)"; \
-		echo "  go install github.com/mitchellh/gox"; \
-		exit 1;\
-	fi
+setup-check: ${GOPATH}/bin/staticcheck ${GOPATH}/bin/gosec ${GOPATH}/bin/govulncheck
+
+${GOPATH}/bin/staticcheck:
+	go install honnef.co/go/tools/cmd/staticcheck@latest
+
+${GOPATH}/bin/gosec:
+	go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+${GOPATH}/bin/govulncheck:
+	go install golang.org/x/vuln/cmd/govulncheck@latest
 
 build: setup
 	@[ -d "${BUILDDIR}/bin" ] || mkdir -p "${BUILDDIR}/bin"
@@ -69,28 +82,32 @@ build: setup
 
 test: setup
 	@echo "Running tests..."
-	@go test -count=1 -vet=off ${GOTEST_FLAGS} ./...
+	@go test -count=1 -cpu=4 -vet=off ${GOTEST_FLAGS} ./...
+
+bench: setup
+	@echo "Running benchmarks..."
+	@go test -bench="." -run="^$$" -test.benchmem=true ${GOTEST_BENCHFLAGS} ./...
 
 cover: setup
 	@echo "Running tests with coverage..."
 	@go test -vet=off -cover ${GOTEST_FLAGS} ./...
 
-check: setup
+check: setup setup-check
 	@echo "Running checks and validators..."
 	@echo "... staticcheck ..."
-	@$$(go env GOPATH)/bin/staticcheck ./...
+	@${GOPATH}/bin/staticcheck ./...
 	@echo "... go-vet ..."
 	@go vet ./...
 	@echo "... gosec ..."
-	@$$(go env GOPATH)/bin/gosec -quiet ./...
+	@${GOPATH}/bin/gosec -quiet ./...
+	@echo "... govulncheck ..."
+	@${GOPATH}/bin/govulncheck ./...
 
 .PHONY: update-go-deps
 update-go-deps:
 	@echo ">> updating Go dependencies"
-	@for m in $$(go list -mod=readonly -m -f '{{ if and (not .Indirect) (not .Main)}}{{.Path}}{{end}}' all); do \
-		go get $$m; \
-	done
-	go mod tidy
+	@go get -u all
+	@go mod tidy
 
 ${BUILDDIR}/man/%: man/%.adoc
 	@[ -d "${BUILDDIR}/man" ] || mkdir -p "${BUILDDIR}/man"
@@ -108,30 +125,31 @@ tar: all
 	@tar -C ${TARBUILDDIR} -czf ${TARBUILDDIR}/${APP_NAME}-${APP_VER}.${GOVER}.${OS}-${ARCH}.tar.gz ${APP_NAME}-${APP_VER}
 	@rm -rf "${TARBUILDDIR}/${APP_NAME}-${APP_VER}"
 
-cross-tar: man setup setup-gox
+cross-tar: man setup
 	@echo "Building (cross-compile: ${CC_BUILD_ARCHES})..."
-	@(for x in go-camo url-tool; do \
-		echo "...$${x}..."; \
-		env GOFLAGS="${GOBUILD_OPTIONS}" gox \
-			-gocmd="go" \
-			-output="${CC_OUTPUT_TPL}" \
-			-osarch="${CC_BUILD_ARCHES}" \
-			-ldflags "${GOBUILD_LDFLAGS} -X ${VERSION_VAR}=${APP_VER}" \
-		${GOBUILD_DEPFLAGS} ./cmd/$${x}; \
-		echo; \
+	@(for x in ${CC_BUILD_TARGETS}; do \
+		for y in $(subst /,-,${CC_BUILD_ARCHES}); do \
+			printf -- "--> %15s: %s\n" "$${y}" "$${x}"; \
+			GOOS="$${y%%-*}"; \
+			GOARCH="$${y##*-}"; \
+			EXT=""; \
+			if echo "$${y}" | grep -q 'windows-'; then EXT=".exe"; fi; \
+			env GOOS=$${GOOS} GOARCH=$${GOARCH} go build ${GOBUILD_FLAGS} -o "${BUILDDIR}/bin/$${x}.$${GOOS}-$${GOARCH}$${EXT}" ./cmd/$${x}; \
+		done; \
 	done)
 
-	@echo "...creating tar files..."
+	@echo "Creating tar archives..."
 	@(for x in $(subst /,-,${CC_BUILD_ARCHES}); do \
-		echo "making tar for ${APP_NAME}.$${x}"; \
+		printf -- "--> %15s\n" "$${x}"; \
 		EXT=""; \
 		if echo "$${x}" | grep -q 'windows-'; then EXT=".exe"; fi; \
 		XDIR="${GOVER}.$${x}"; \
 		ODIR="${TARBUILDDIR}/$${XDIR}/${APP_NAME}-${APP_VER}"; \
 		mkdir -p "$${ODIR}/bin"; \
 		mkdir -p "$${ODIR}/man"; \
-		cp ${BUILDDIR}/bin/${APP_NAME}.$${x}$${EXT} $${ODIR}/bin/${APP_NAME}$${EXT}; \
-		cp ${BUILDDIR}/bin/url-tool.$${x}$${EXT} $${ODIR}/bin/url-tool$${EXT}; \
+		for t in ${CC_BUILD_TARGETS}; do \
+			cp ${BUILDDIR}/bin/$${t}.$${x}$${EXT} $${ODIR}/bin/$${t}$${EXT}; \
+		done; \
 		cp ${BUILDDIR}/man/*.[1-9] $${ODIR}/man/; \
 		tar -C ${TARBUILDDIR}/$${XDIR} -czf ${TARBUILDDIR}/${APP_NAME}-${APP_VER}.$${XDIR}.tar.gz ${APP_NAME}-${APP_VER}; \
 		rm -rf "${TARBUILDDIR}/$${XDIR}/"; \
