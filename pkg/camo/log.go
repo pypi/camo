@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2019 Eli Janssen
+// Copyright (c) 2012-2023 Eli Janssen
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
@@ -15,7 +15,7 @@ import (
 func httpReqToMlogMap(req *http.Request) mlog.Map {
 	return mlog.Map{
 		"method":            req.Method,
-		"path":              req.RequestURI,
+		"path":              req.URL.Path,
 		"proto":             req.Proto,
 		"header":            req.Header,
 		"content_length":    req.ContentLength,

@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2019 Eli Janssen
+// Copyright (c) 2012-2023 Eli Janssen
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
@@ -66,6 +66,10 @@ func uniformLower(s, cutset string) string {
 	}
 	s = strings.ToLower(s)
 	return s
+}
+
+func CleanHostname(s string) (string, error) {
+	return idna.Lookup.ToASCII(strings.ToLower(strings.TrimSpace(s)))
 }
 
 func (dt *URLMatcher) getOrNewSubTree(s string) *URLMatcher {
@@ -224,12 +228,30 @@ func (dt *URLMatcher) AddRule(rule string) error {
 func (dt *URLMatcher) walkFind(s string) []*URLMatcher {
 	// hostname should already be lowercase. avoid work by not doing it.
 	matches := *getURLMatcherSlice()
-	labels := reverse(strings.Split(s, "."))
-	plen := len(labels)
 	curnode := dt
+	slen := len(s)
 	// kind of weird ordering, because the root node isn't part of the search
-	// space.
-	for i, label := range labels {
+	// space, but walk backwards slicing as we go because we want hostname
+	// components in reverse order. eg. foo.example.com -> [com example foo]
+	// note: doing this manually because it saves allocations vs strings.Split
+	// (and is a bit faster as well)
+	for i := slen - 1; i >= 0; i-- {
+		label := ""
+		atLabel := false
+		if s[i] == '.' {
+			label = s[i+1 : slen]
+			slen = i
+			atLabel = true
+		}
+		if i == 0 {
+			label = s[i:slen]
+			slen = i
+			atLabel = true
+		}
+		if !atLabel {
+			continue
+		}
+
 		if curnode.subtrees == nil || len(curnode.subtrees) == 0 {
 			break
 		}
@@ -250,13 +272,13 @@ func (dt *URLMatcher) walkFind(s string) []*URLMatcher {
 
 		// not at a domain terminus, and there is a wildcard label,
 		// so add child to match (if exists)
-		if i < plen-1 && curnode.hasWildChild {
+		if i > 0 && curnode.hasWildChild {
 			if x, ok := curnode.subtrees["*"]; ok {
 				matches = append(matches, x)
 			}
 		}
 		// hit the end, and we can match at this level
-		if i == plen-1 && curnode.canMatch {
+		if i == 0 && curnode.canMatch {
 			matches = append(matches, curnode)
 		}
 	}
@@ -266,41 +288,58 @@ func (dt *URLMatcher) walkFind(s string) []*URLMatcher {
 // CheckURL checks a *url.URL against the URLMatcher.
 // If the url matches (a "hit"), it returns true.
 // If the url does not match (a "miss"), it return false.
-func (dt *URLMatcher) CheckURL(u *url.URL) bool {
+func (dt *URLMatcher) CheckURL(u *url.URL) (bool, error) {
 	// alas, (*url.URL).Hostname() does not ToLower
-	hostname := strings.ToLower(u.Hostname())
+	// so lower and idna map
+	hostname, err := CleanHostname(u.Hostname())
+	if err != nil {
+		// invalid idna is a fail/false
+		return false, fmt.Errorf("bad hostname: %w", err)
+	}
+
 	matches := dt.walkFind(hostname)
 	defer putURLMatcherSlice(&matches)
 
 	// check for base domain matches first, to avoid path checking if possible
 	for _, match := range matches {
+		// we can shortcut lookups only if the match has no associated url rules
 		if !match.hasRules {
-			return true
+			return true, nil
 		}
 	}
 
 	// no luck, so try path rules this time
 	for _, match := range matches {
 		// anything match.hasRules _shouldn't_ be nil, so this check is
-		// likely superfluous...
+		// likely superfluous... but retained for extra safety in case
+		// the api changes at some point
 		if match.pathChecker == nil {
 			continue
 		}
 		if match.pathChecker.CheckPath(u.EscapedPath()) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // CheckHostname checks the supplied hostname (as a string).
-// Note: CheckHostname requires that the hostname is already escaped,
-// sanitized, space trimmed, and lowercased...
-// Basically sanitized in a way similar to:
-//
-//	strings.ToLower((*url.URL).Hostname())
-func (dt *URLMatcher) CheckHostname(hostname string) bool {
-	hostname = strings.ToLower(hostname)
+// Returns an error if the hostname is not idna lookup compliant.
+func (dt *URLMatcher) CheckHostname(hostname string) (bool, error) {
+	// do idna lookup mapping. if mapping fails, return false
+	hostname, err := CleanHostname(hostname)
+	if err != nil {
+		// invalid idna is a fail/false
+		return false, fmt.Errorf("bad hostname: %w", err)
+	}
+
+	return dt.CheckCleanHostname(hostname), nil
+}
+
+// CheckHostnameClean checks the supplied hostname (as a string).
+// The supplied hostname must already be safe/cleaned, in a way
+// similar to IdnaLookupMap.
+func (dt *URLMatcher) CheckCleanHostname(hostname string) bool {
 	matches := dt.walkFind(hostname)
 	defer putURLMatcherSlice(&matches)
 	return len(matches) > 0

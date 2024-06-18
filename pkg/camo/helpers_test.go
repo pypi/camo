@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2019 Eli Janssen
+// Copyright (c) 2012-2023 Eli Janssen
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
@@ -11,8 +11,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/cactus/go-camo/pkg/camo/encoding"
-	"github.com/cactus/go-camo/pkg/router"
+	"github.com/cactus/go-camo/v2/pkg/camo/encoding"
+	"github.com/cactus/go-camo/v2/pkg/router"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
 )
@@ -74,21 +74,29 @@ func makeTestReq(testURL string, status int, config Config) (*http.Response, err
 }
 
 func bodyAssert(t *testing.T, expected string, resp *http.Response) {
+	t.Helper()
 	body, err := io.ReadAll(resp.Body)
 	assert.Check(t, err)
 	bodyString := string(body)
-	assert.Check(t, is.Equal(expected, bodyString), "Expected 404 response body but got '%s' instead",
-		bodyString)
-
+	assert.Check(t, is.Equal(expected, bodyString),
+		"Expected 404 response body but got '%s' instead",
+		bodyString,
+	)
 }
 
 func headerAssert(t *testing.T, expected, name string, resp *http.Response) {
-	assert.Check(t, is.Equal(expected, resp.Header.Get(name)), "Expected response header mismatch")
-
+	t.Helper()
+	assert.Check(t,
+		is.Equal(expected, resp.Header.Get(name)),
+		"Expected response header mismatch",
+	)
 }
 
 func statusCodeAssert(t *testing.T, expected int, resp *http.Response) {
-	assert.Check(t, is.Equal(expected, resp.StatusCode), "Expected %d but got '%d' instead",
-		expected, resp.StatusCode)
-
+	t.Helper()
+	assert.Check(t,
+		is.Equal(expected, resp.StatusCode),
+		"Expected %d but got '%d' instead",
+		expected, resp.StatusCode,
+	)
 }

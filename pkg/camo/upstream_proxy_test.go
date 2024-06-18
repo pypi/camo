@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2019 Eli Janssen
+// Copyright (c) 2012-2023 Eli Janssen
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
@@ -7,11 +7,20 @@ package camo
 import (
 	"fmt"
 	"net"
+	"sort"
 	"testing"
 
 	"golang.org/x/net/http/httpproxy"
 	"gotest.tools/v3/assert"
 )
+
+func IPListToStringList(sliceList []net.IP) []string {
+	list := make([]string, 0, len(sliceList))
+	for _, item := range sliceList {
+		list = append(list, item.String())
+	}
+	return list
+}
 
 func TestUpstreamProxyParsing(t *testing.T) {
 	t.Parallel()
@@ -38,12 +47,15 @@ func TestUpstreamProxyParsing(t *testing.T) {
 	assert.Equal(t, uspc.httpsProxy.scheme, "socks5")
 	assert.Equal(t, uspc.httpsProxy.host, "localhost")
 	assert.Equal(t, uspc.httpsProxy.port, "9999")
+
+	addresses := IPListToStringList(uspc.httpsProxy.addresses)
+	sort.Strings(addresses)
 	assert.DeepEqual(
 		t,
-		uspc.httpsProxy.addresses,
-		[]net.IP{
-			net.ParseIP("::1"),
-			net.ParseIP("127.0.0.1"),
+		addresses,
+		[]string{
+			"127.0.0.1",
+			"::1",
 		},
 	)
 }
@@ -128,5 +140,4 @@ func TestUpstreamProxyMatching(t *testing.T) {
 			errMsg(elem.matchtype, elem.address, elem.port, elem.result),
 		)
 	}
-
 }

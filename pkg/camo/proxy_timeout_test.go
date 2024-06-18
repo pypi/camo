@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2019 Eli Janssen
+// Copyright (c) 2012-2023 Eli Janssen
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
 
@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cactus/go-camo/pkg/camo/encoding"
-	"github.com/cactus/go-camo/pkg/router"
+	"github.com/cactus/go-camo/v2/pkg/camo/encoding"
+	"github.com/cactus/go-camo/v2/pkg/router"
 	"github.com/cactus/mlog"
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
@@ -40,7 +40,6 @@ func TestTimeout(t *testing.T) {
 		r.Close = true
 		_, err := w.Write([]byte("ok"))
 		assert.Check(t, err)
-
 	}))
 	defer ts.Close()
 
@@ -101,7 +100,7 @@ func TestClientCancelEarly(t *testing.T) {
 				_, err := fmt.Fprintf(w, "Chunk #%d\n", i)
 				// conn closed/broken pipe
 				if err != nil {
-					mlog.Debugm("write error", mlog.Map{"err": err, "i": i})
+					mlog.Debugx("write error", mlog.A("err", err), mlog.A("i", i))
 					break
 				}
 				flusher.Flush() // Trigger "chunked" encoding and send a chunk...
@@ -132,7 +131,7 @@ func TestClientCancelEarly(t *testing.T) {
 	assert.Check(t, err)
 	conn.Close()
 	time.Sleep(100 * time.Millisecond)
-	fmt.Printf("done\n")
+	// fmt.Printf("done\n")
 }
 
 func TestClientCancelLate(t *testing.T) {
@@ -156,7 +155,7 @@ func TestClientCancelLate(t *testing.T) {
 				_, err := fmt.Fprintf(w, "Chunk #%d\n", i)
 				// conn closed/broken pipe
 				if err != nil {
-					mlog.Debugm("write error", mlog.Map{"err": err, "i": i})
+					mlog.Debugx("write error", mlog.A("err", err), mlog.A("i", i))
 					break
 				}
 				flusher.Flush() // Trigger "chunked" encoding and send a chunk...
@@ -210,7 +209,7 @@ func TestClientCancelLate(t *testing.T) {
 		}
 	}
 	conn.Close()
-	fmt.Printf("done\n")
+	// fmt.Printf("done\n")
 }
 
 func TestServerEarlyEOF(t *testing.T) {
