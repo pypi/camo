@@ -1,1 +1,1 @@
-web: go-camo --listen=0.0.0.0:$PORT -k $HMAC_KEY
+web: /bin/go-camo --socket-listen=/var/run/cabotage/cabotage.sock --server-name=https://github.com/pypi/camo --max-size=$GOCAMO_MAXSIZE --max-size-redirect=$GOCAMO_MAXSIZEREDIRECT --header="Access-Control-Allow-Origin: $ALLOW_ORIGIN"
