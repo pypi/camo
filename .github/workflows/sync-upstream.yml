@@ -1,0 +1,50 @@
+name: sync-upstream
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Run weekly on Mondays at 09:00 UTC
+    - cron: "0 9 * * 1"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: pypi/patches
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/cactus/go-camo.git
+
+      - name: Fetch upstream
+        run: git fetch upstream master
+
+      - name: Update master branch
+        run: git push origin upstream/master:refs/heads/master
+
+      - name: Rebase patches onto updated master
+        run: |
+          # Identify the PyPI-specific commits (on top of master)
+          PATCH_COUNT=$(git rev-list --count master..pypi/patches)
+          echo "Found $PATCH_COUNT patch commit(s) to rebase"
+
+          if [ "$PATCH_COUNT" -eq 0 ]; then
+            echo "No patches to rebase"
+            exit 0
+          fi
+
+          git rebase upstream/master
+
+      - name: Push updated patches branch
+        run: git push --force-with-lease origin pypi/patches
