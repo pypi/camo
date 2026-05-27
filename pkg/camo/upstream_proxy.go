@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 
 	"golang.org/x/net/http/httpproxy"
 )
@@ -34,12 +35,7 @@ func (ic *innerUpstreamProxyConfig) matchesIP(ip net.IP, port string) bool {
 		return false
 	}
 
-	for _, ipx := range ic.addresses {
-		if ip.Equal(ipx) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(ic.addresses, ip.Equal)
 }
 
 func (ic *innerUpstreamProxyConfig) matchesHost(host string, port string) bool {

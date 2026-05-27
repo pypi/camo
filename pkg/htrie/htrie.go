@@ -32,7 +32,7 @@ type URLMatcher struct {
 }
 
 var matchesPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		// starting backing array size of 8
 		// that /seems/ like a pretty good initial value, without
 		// being too crazy, and has the nice property of being a powler of 2. ;)
@@ -52,7 +52,7 @@ func putURLMatcherSlice(s *[]*URLMatcher) {
 
 func reverse(s []string) []string {
 	c := len(s) / 2
-	for i := 0; i < c; i++ {
+	for i := range c {
 		j := len(s) - i - 1
 		s[i], s[j] = s[j], s[i]
 	}
@@ -109,7 +109,7 @@ func (dt *URLMatcher) parseRule(rule string) ([]string, error) {
 			index++
 			continue
 		}
-		_, err := ruleset[index].WriteRune(r)
+		_, err := ruleset[index].WriteRune(r) // #nosec G602 - false positive
 		if err != nil {
 			return nil, err
 		}
@@ -252,7 +252,8 @@ func (dt *URLMatcher) walkFind(s string) []*URLMatcher {
 			continue
 		}
 
-		if curnode.subtrees == nil || len(curnode.subtrees) == 0 {
+		// len(nil) == 0, so no need to check twice
+		if len(curnode.subtrees) == 0 {
 			break
 		}
 

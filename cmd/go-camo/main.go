@@ -19,10 +19,10 @@ import (
 	"syscall"
 	"time"
 
+	"codeberg.org/dropwhile/mlog"
 	"github.com/alecthomas/kong"
 	"github.com/cactus/go-camo/v2/pkg/camo"
 	"github.com/cactus/go-camo/v2/pkg/router"
-	"github.com/cactus/mlog"
 
 	"github.com/prometheus/client_golang/prometheus"
 	vcoll "github.com/prometheus/client_golang/prometheus/collectors/version"
@@ -30,7 +30,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/version"
 	"github.com/quic-go/quic-go/http3"
-	"go.uber.org/automaxprocs/maxprocs"
+	gomaxecs "github.com/rdforte/gomaxecs/maxprocs"
 )
 
 const metricNamespace = "camo"
@@ -68,32 +68,35 @@ var (
 	)
 )
 
-type CLI struct {
+type CLI struct { // betteralign:ignore
 	HMACKey             string        `name:"key" short:"k" help:"HMAC key"`
 	AddHeaders          []string      `name:"header" short:"H" help:"Add additional header to each response. This option can be used multiple times to add multiple headers."`
 	BindAddress         string        `name:"listen" default:"0.0.0.0:8080" help:"Address:Port to bind to for HTTP"`
-	BindAddressSSL      string        `name:"ssl-listen" help:"Address:Port to bind to for HTTPS/SSL/TLS"`
-	BindSocket          string        `name:"socket-listen" help:"Path for unix domain socket to bind to for HTTP"`
+	BindAddressSSL      string        `name:"ssl-listen" placeholder:"HOST_PORT" help:"Address:Port to bind to for HTTPS/SSL/TLS"`
+	BindSocket          string        `name:"socket-listen" placeholder:"PATH" help:"Path for unix domain socket to bind to for HTTP"`
 	EnableQuic          bool          `name:"quic" help:"Enable http3/quic. Binds to the same port number as ssl-listen but udp+quic."`
 	AutoMaxProcs        bool          `name:"automaxprocs" help:"Set GOMAXPROCS automatically to match Linux container CPU quota/limits."`
-	SSLKey              string        `name:"ssl-key" help:"ssl private key (key.pem) path"`
-	SSLCert             string        `name:"ssl-cert" help:"ssl cert (cert.pem) path"`
-	MaxSize             int64         `name:"max-size" help:"Max allowed response size (KB)"`
-	ReqTimeout          time.Duration `name:"timeout" default:"4s" help:"Upstream request timeout"`
+	SSLKey              string        `name:"ssl-key" placeholder:"PATH" help:"ssl private key (key.pem) path"`
+	SSLCert             string        `name:"ssl-cert" placeholder:"PATH" help:"ssl cert (cert.pem) path"`
+	MaxSize             int64         `name:"max-size" placeholder:"INT" help:"Max allowed response size, in KB"`
+	ReqTimeout          time.Duration `name:"timeout" default:"4s" help:"Upstream request timeout (backend)"`
+	IdleTimeout         time.Duration `name:"idletimeout" default:"30s" help:"Maximum amount of time to wait for the next request when keep-alive is enabled (frontend)"`
+	ReadTimeout         time.Duration `name:"readtimeout" default:"30s" help:"Maximum duration for reading the entire request, including the body (frontend)"`
 	MaxRedirects        int           `name:"max-redirects" default:"3" help:"Maximum number of redirects to follow"`
-	MaxSizeRedirect     string        `long:"max-size-redirect" description:"URL to redirect when max-size is exceeded"`
+	MaxSizeRedirect     string        `name:"max-size-redirect" placeholder:"URL" help:"redirect to URL when max-size is exceeded"`
 	Metrics             bool          `name:"metrics" help:"Enable Prometheus compatible metrics endpoint"`
 	NoDebugVars         bool          `name:"no-debug-vars" help:"Disable the /debug/vars/ metrics endpoint. This option has no effects when the metrics are not enabled."`
 	NoLogTS             bool          `name:"no-log-ts" help:"Do not add a timestamp to logging"`
 	Profile             bool          `name:"prof" help:"Enable go http profiler endpoint"`
 	LogJson             bool          `name:"log-json" help:"Log in JSON format"`
-	DisableKeepAlivesFE bool          `name:"no-fk" help:"Disable frontend http keep-alive support"`
-	DisableKeepAlivesBE bool          `name:"no-bk" help:"Disable backend http keep-alive support"`
+	DisableKeepAlivesFE bool          `name:"no-fk" help:"Disable frontend http keep-alive support (frontend)"`
+	DisableKeepAlivesBE bool          `name:"no-bk" help:"Disable backend http keep-alive support (backend)"`
 	AllowContentVideo   bool          `name:"allow-content-video" help:"Additionally allow 'video/*' content"`
 	AllowContentAudio   bool          `name:"allow-content-audio" help:"Additionally allow 'audio/*' content"`
 	AllowCredentialURLs bool          `name:"allow-credential-urls" help:"Allow urls to contain user/pass credentials"`
-	FilterRuleset       string        `name:"filter-ruleset" help:"Text file containing filtering rules (one per line)"`
+	FilterRuleset       string        `name:"filter-ruleset" placeholder:"PATH" help:"Text file containing filtering rules (one per line)"`
 	ServerName          string        `name:"server-name" default:"go-camo" help:"Value to use for the HTTP server field"`
+	UserAgent           string        `name:"user-agent" default:"go-camo" help:"user-agent for outgoing requests"`
 	ExposeServerVersion bool          `name:"expose-server-version" help:"Include the server version in the HTTP server response header"`
 	EnableXFwdFor       bool          `name:"enable-xfwd4" help:"Enable x-forwarded-for passthrough/generation"`
 	Verbose             bool          `name:"verbose" short:"v" help:"Show verbose (debug) log level output"`
@@ -157,13 +160,30 @@ func (cli *CLI) Run() {
 	config.DisableKeepAlivesBE = cli.DisableKeepAlivesBE
 	config.DisableKeepAlivesFE = cli.DisableKeepAlivesFE
 
-	// other options
-	config.EnableXFwdFor = cli.EnableXFwdFor
-	config.AllowCredentialURLs = cli.AllowCredentialURLs
+	// timeouts
+	config.RequestTimeout = cli.ReqTimeout
+	config.IdleTimeout = cli.IdleTimeout
+	config.ReadTimeout = cli.ReadTimeout
+
+	// redirects
+	config.MaxRedirects = cli.MaxRedirects
+	config.MaxSizeRedirect = cli.MaxSizeRedirect
 
 	// additional content types to allow
 	config.AllowContentVideo = cli.AllowContentVideo
 	config.AllowContentAudio = cli.AllowContentAudio
+
+	// other options
+	config.EnableXFwdFor = cli.EnableXFwdFor
+	config.AllowCredentialURLs = cli.AllowCredentialURLs
+	config.MaxSize = cli.MaxSize * 1024 // convert from KB to Bytes
+	config.ServerName = ServerName
+	config.UserAgent = cli.UserAgent
+
+	// configure metrics collection in camo
+	if cli.Metrics {
+		config.CollectMetrics = true
+	}
 
 	var filters []camo.FilterFunc
 	if cli.FilterRuleset != "" {
@@ -210,30 +230,15 @@ func (cli *CLI) Run() {
 		mlog.Debug("debug logging enabled")
 	}
 
-	if cli.AutoMaxProcs {
+	if cli.AutoMaxProcs && gomaxecs.IsECS() {
 		// #nosec G104
-		maxprocs.Set(
-			maxprocs.Logger(mlog.Infof),
-			// uncomment once gomaxprocs has a new release, as this fixes
-			// https://github.com/uber-go/automaxprocs/issues/78 and similar.
-		// maxprocs.RoundQuotaFunc(func(v float64) int { return int(math.Ceil(v)) }),
-		)
+		gomaxecs.Set(gomaxecs.WithLogger(func(str string, params ...any) {
+			mlog.Info(str, params)
+		}))
 	}
 
 	if cli.LogJson {
 		mlog.SetEmitter(&mlog.FormatWriterJSON{})
-	}
-
-	// convert from KB to Bytes
-	config.MaxSize = cli.MaxSize * 1024
-	config.RequestTimeout = cli.ReqTimeout
-	config.MaxRedirects = cli.MaxRedirects
-        config.MaxSizeRedirect = cli.MaxSizeRedirect
-	config.ServerName = ServerName
-
-	// configure metrics collection in camo
-	if cli.Metrics {
-		config.CollectMetrics = true
 	}
 
 	proxy, err := camo.NewWithFilters(config, filters)
@@ -297,7 +302,8 @@ func (cli *CLI) Run() {
 	if cli.BindAddress != "" {
 		httpSrv = &http.Server{
 			Addr:        cli.BindAddress,
-			ReadTimeout: 30 * time.Second,
+			ReadTimeout: config.ReadTimeout,
+			IdleTimeout: config.IdleTimeout,
 			Handler:     mux,
 		}
 	}
@@ -305,14 +311,16 @@ func (cli *CLI) Run() {
 	if cli.BindAddressSSL != "" {
 		tlsSrv = &http.Server{
 			Addr:        cli.BindAddressSSL,
-			ReadTimeout: 30 * time.Second,
+			ReadTimeout: config.ReadTimeout,
+			IdleTimeout: config.IdleTimeout,
 			Handler:     mux,
 		}
 
 		if cli.EnableQuic {
 			quicSrv = &http3.Server{
-				Addr:    cli.BindAddressSSL,
-				Handler: mux,
+				Addr:        cli.BindAddressSSL,
+				IdleTimeout: config.IdleTimeout,
+				Handler:     mux,
 			}
 			// wrap default mux to set some default quic reference headers on tls responses
 			tlsSrv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -331,29 +339,31 @@ func (cli *CLI) Run() {
 		mlog.Info("Handling signal:", s)
 		mlog.Info("Starting graceful shutdown")
 
-		closeWait := 200 * time.Millisecond
+		closeWait := 300 * time.Millisecond
 
-		ctx, cancel := context.WithTimeout(context.Background(), closeWait)
-		// Even though ctx may be expired by then, it is good practice to call its
-		// cancellation function in any case. Failure to do so may keep the
-		// context and its parent alive longer than necessary.
-		defer cancel()
 		if httpSrv != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), closeWait)
+			// Even though ctx may be expired by then, it is good practice to call its
+			// cancellation function in any case. Failure to do so may keep the
+			// context and its parent alive longer than necessary.
+			defer cancel()
 			if err := httpSrv.Shutdown(ctx); err != nil {
 				mlog.Info("Error gracefully shutting down HTTP server:", err)
 			}
 		}
 
-		ctx, cancel = context.WithTimeout(context.Background(), closeWait)
-		defer cancel()
 		if tlsSrv != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), closeWait)
+			defer cancel()
 			if err := tlsSrv.Shutdown(ctx); err != nil {
 				mlog.Info("Error gracefully shutting down HTTP/TLS server:", err)
 			}
 		}
 
 		if quicSrv != nil {
-			if err := quicSrv.CloseGracefully(closeWait); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), closeWait)
+			defer cancel()
+			if err := quicSrv.Shutdown(ctx); err != nil {
 				mlog.Info("Error gracefully shutting down HTTP3/QUIC server:", err)
 			}
 		}
