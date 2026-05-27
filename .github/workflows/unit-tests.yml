@@ -2,76 +2,125 @@ name: unit-tests
 on:
   workflow_dispatch:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: [main]
+
+permissions: {}
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Src Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 1
+          persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - run: mkdir -p .cache/tools ~/go/pkg/mod ~/.cache/go-build
+      - name: Restore cached tools and go
+        id: cache-tools-and-go-restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
-          go-version: ">=1.22.0"
-          check-latest: true
-        id: go
+          path: |
+            .cache/tools
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: cache-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock') }}-${{ hashFiles('tools/tools.conf', '**/go.sum') }}
+          restore-keys: |
+            cache-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock') }}-
+
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+        with:
+          experimental: true
 
       - name: Build
         env:
           GOPROXY: "https://proxy.golang.org"
-        run: make build
+        run: just build
 
       - name: Check
         env:
           GOPROXY: "https://proxy.golang.org"
-        run: |
-          make check
+        run: just check
 
       - name: Tests
         env:
           GOPROXY: "https://proxy.golang.org"
           CI: true
-        run: make test
+        run: just test
+
+      - name: Always save tools and go cache
+        id: cache-tools-and-go-save
+        if: always() && steps.cache-tools-and-go-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          key: ${{ steps.cache-tools-and-go-restore.outputs.cache-primary-key }}
+          path: |
+            .cache/tools
+            ~/.cache/go-build
+            ~/go/pkg/mod
 
   test-qemu:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         arch: [arm64]
 
     steps:
       - name: Src Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 1
+          persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - run: mkdir -p .cache/tools ~/go/pkg/mod ~/.cache/go-build
+      - name: Restore cached tools and go
+        id: cache-tools-and-go-restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
-          go-version: ">=1.22.0"
-          check-latest: true
-        id: go
+          path: |
+            .cache/tools
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-${{ runner.arch }}-cache-${{ hashFiles('tools/tools.conf', '**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-cache-
+
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+        with:
+          experimental: true
 
       - name: Install QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
 
       - name: Build
         env:
           GOPROXY: "https://proxy.golang.org"
           GOARCH: ${{ matrix.arch }}
-        run: make build
+        run: just build
 
       - name: Tests
         env:
           GOPROXY: "https://proxy.golang.org"
           GOARCH: ${{ matrix.arch }}
           CI: true
-        run: make test
+        run: just test
+
+      - name: Always save tools and go cache
+        id: cache-tools-and-go-save
+        if: always() && steps.cache-tools-and-go-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          key: ${{ steps.cache-tools-and-go-restore.outputs.cache-primary-key }}
+          path: |
+            .cache/tools
+            ~/.cache/go-build
+            ~/go/pkg/mod

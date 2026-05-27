@@ -5,16 +5,18 @@
 package camo
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
+	"codeberg.org/dropwhile/assert"
 	"github.com/cactus/go-camo/v2/pkg/camo/encoding"
 	"github.com/cactus/go-camo/v2/pkg/router"
-	"gotest.tools/v3/assert"
-	is "gotest.tools/v3/assert/cmp"
 )
 
 func makeReq(config Config, testURL string) (*http.Request, error) {
@@ -76,27 +78,60 @@ func makeTestReq(testURL string, status int, config Config) (*http.Response, err
 func bodyAssert(t *testing.T, expected string, resp *http.Response) {
 	t.Helper()
 	body, err := io.ReadAll(resp.Body)
-	assert.Check(t, err)
+	assert.Nil(t, err)
 	bodyString := string(body)
-	assert.Check(t, is.Equal(expected, bodyString),
-		"Expected 404 response body but got '%s' instead",
-		bodyString,
+	assert.Equal(t, expected, bodyString,
+		fmt.Sprintf("Expected 404 response body but got '%s' instead",
+			bodyString,
+		),
 	)
 }
 
 func headerAssert(t *testing.T, expected, name string, resp *http.Response) {
 	t.Helper()
-	assert.Check(t,
-		is.Equal(expected, resp.Header.Get(name)),
+	assert.Equal(t,
+		expected, resp.Header.Get(name),
 		"Expected response header mismatch",
 	)
 }
 
 func statusCodeAssert(t *testing.T, expected int, resp *http.Response) {
 	t.Helper()
-	assert.Check(t,
-		is.Equal(expected, resp.StatusCode),
-		"Expected %d but got '%d' instead",
+	assert.Equal(t,
 		expected, resp.StatusCode,
+		fmt.Sprintf("Expected %d but got '%d' instead",
+			expected, resp.StatusCode,
+		),
 	)
+}
+
+type Tuple[A any, B any] struct {
+	a A
+	b B
+}
+
+func (r *Tuple[A, B]) UnmarshalJSON(p []byte) error {
+	var tmp []json.RawMessage
+	if err := json.Unmarshal(p, &tmp); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(tmp[0], &r.a); err != nil {
+		return err
+	}
+
+	if reflect.TypeFor[*B]() == reflect.TypeFor[*B]() {
+		var s string
+		if err := json.Unmarshal(tmp[1], &s); err != nil {
+			return err
+		}
+		if s != "" {
+			err := errors.New(s)
+			r.b = err.(B)
+		}
+	} else {
+		if err := json.Unmarshal(tmp[1], &r.b); err != nil {
+			return err
+		}
+	}
+	return nil
 }

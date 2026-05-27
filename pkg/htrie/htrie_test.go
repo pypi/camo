@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"gotest.tools/v3/assert"
+	"codeberg.org/dropwhile/assert"
 )
 
 func TestHTrieCheckURL(t *testing.T) {
@@ -51,7 +51,7 @@ func TestHTrieCheckURL(t *testing.T) {
 	dt := NewURLMatcher()
 	for _, rule := range rules {
 		err := dt.AddRule(rule)
-		assert.Check(t, err)
+		assert.Nil(t, err)
 	}
 
 	// fmt.Println(dt.RenderTree())
@@ -59,14 +59,14 @@ func TestHTrieCheckURL(t *testing.T) {
 	for _, u := range testMatch {
 		u, _ := url.Parse(u)
 		chk, err := dt.CheckURL(u)
-		assert.NilError(t, err)
-		assert.Check(t, chk, fmt.Sprintf("should have matched: %s", urlPathUnescape(u)))
+		assert.Nil(t, err)
+		assert.True(t, chk, fmt.Sprintf("should have matched: %s", urlPathUnescape(u)))
 	}
 	for _, u := range testNoMatch {
 		u, _ := url.Parse(u)
 		chk, err := dt.CheckURL(u)
-		assert.NilError(t, err)
-		assert.Check(t, !chk, fmt.Sprintf("should not have matched: %s", urlPathUnescape(u)))
+		assert.Nil(t, err)
+		assert.False(t, chk, fmt.Sprintf("should not have matched: %s", urlPathUnescape(u)))
 	}
 }
 
@@ -118,14 +118,14 @@ func TestHTrieCheckHostname(t *testing.T) {
 	for _, u := range testMatch {
 		u, _ := url.Parse(u)
 		result, err := dt.CheckHostname(u.Hostname())
-		assert.NilError(t, err)
-		assert.Check(t, result, fmt.Sprintf("should have matched: %s", urlPathUnescape(u)))
+		assert.Nil(t, err)
+		assert.True(t, result, fmt.Sprintf("should have matched: %s", urlPathUnescape(u)))
 	}
 	for _, u := range testNoMatch {
 		u, _ := url.Parse(u)
 		result, err := dt.CheckHostname(u.Hostname())
-		assert.NilError(t, err)
-		assert.Check(t, !result, fmt.Sprintf("should not have matched: %s", urlPathUnescape(u)))
+		assert.Nil(t, err)
+		assert.False(t, result, fmt.Sprintf("should not have matched: %s", urlPathUnescape(u)))
 	}
 }
 
@@ -140,8 +140,8 @@ func BenchmarkHTrieCreate(b *testing.B) {
 		"||*.hodor.example.net||/*/test.png",
 	}
 	var err error
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		for _, u := range urls {
 			err = dt.AddRule(u)
 			if err != nil {
@@ -160,8 +160,8 @@ func BenchmarkRegexCreate(b *testing.B) {
 
 	var r *regexp.Regexp
 	var err error
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		for _, u := range urls {
 			r, err = regexp.Compile(u)
 			if err != nil {
@@ -198,7 +198,7 @@ func BenchmarkHTrieMatch(b *testing.B) {
 	dt := NewURLMatcher()
 	for _, rule := range rules {
 		err := dt.AddRule(rule)
-		assert.Check(b, err)
+		assert.Nil(b, err)
 	}
 
 	parsed := make([]*url.URL, 0)
@@ -212,7 +212,7 @@ func BenchmarkHTrieMatch(b *testing.B) {
 	b.ResetTimer()
 
 	for _, u := range parsed {
-		for i := 0; i < testIters; i++ {
+		for range testIters {
 			x, _ = dt.CheckURL(u)
 		}
 	}
@@ -249,7 +249,7 @@ func BenchmarkRegexMatch(b *testing.B) {
 	b.ResetTimer()
 
 	for _, u := range testUrls {
-		for i := 0; i < testIters; i++ {
+		for range testIters {
 			// walk regexes in order. first match wins
 			for _, rx := range rexes {
 				if rx.MatchString(u) {
@@ -277,7 +277,7 @@ func BenchmarkHTrieMatchHostname(b *testing.B) {
 	dt := NewURLMatcher()
 	for _, rule := range rules {
 		err := dt.AddRule(rule)
-		assert.Check(b, err)
+		assert.Nil(b, err)
 	}
 
 	parsed := make([]string, 0)
@@ -292,7 +292,7 @@ func BenchmarkHTrieMatchHostname(b *testing.B) {
 
 	b.Run("CheckHostname", func(b *testing.B) {
 		for _, u := range parsed {
-			for i := 0; i < testIters; i++ {
+			for range testIters {
 				x, _ = dt.CheckHostname(u)
 			}
 		}
@@ -300,7 +300,7 @@ func BenchmarkHTrieMatchHostname(b *testing.B) {
 
 	b.Run("CheckCleanHostname", func(b *testing.B) {
 		for _, u := range parsed {
-			for i := 0; i < testIters; i++ {
+			for range testIters {
 				x = dt.CheckCleanHostname(u)
 			}
 		}

@@ -22,16 +22,18 @@ import (
 	"github.com/cactus/go-camo/v2/pkg/camo/encoding"
 	"github.com/cactus/go-camo/v2/pkg/htrie"
 
-	"github.com/cactus/mlog"
+	"codeberg.org/dropwhile/mlog"
 )
 
 //lint:file-ignore ST1005 Ignore string case error to maintain existing responses
 // as some may people parse these
 
 // Config holds configuration data used when creating a Proxy with New.
-type Config struct {
+type Config struct { // betteralign:ignore
 	// Server name used in Headers and Via checks
 	ServerName string
+	// User Agent used in outbound request Headers
+	UserAgent string
 	// HMACKey is a byte slice to be used as the hmac key
 	HMACKey []byte
 	// MaxSize is the maximum valid image size response (in bytes).
@@ -42,6 +44,10 @@ type Config struct {
 	MaxRedirects int
 	// Request timeout is a timeout for fetching upstream data.
 	RequestTimeout time.Duration
+	// IdleTimeout is the maximum amount of time to wait for the next request when keep-alive is enabled
+	IdleTimeout time.Duration
+	// Maximum duration for reading the entire request, including the body.
+	ReadTimeout time.Duration
 	// Keepalive enable/disable
 	DisableKeepAlivesFE bool
 	DisableKeepAlivesBE bool
@@ -126,7 +132,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	nreq, err := http.NewRequestWithContext(req.Context(), req.Method, sURL, nil)
+	nreq, err := http.NewRequestWithContext(req.Context(), req.Method, sURL, nil) //#nosec G704
 	if err != nil {
 		if mlog.HasDebug() {
 			mlog.Debugx("could not create NewRequest", mlog.A("err", err))
@@ -159,15 +165,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	// add/squash an accept header if the client didn't send one
 	nreq.Header.Set("Accept", p.acceptTypesString)
+	nreq.Header.Add("User-Agent", p.config.UserAgent)
 
-	nreq.Header.Add("User-Agent", p.config.ServerName)
+	// must be ServerName to avoid request loops, checked at the top of ServeHttp
 	nreq.Header.Add("Via", p.config.ServerName)
 
 	if mlog.HasDebug() {
 		mlog.Debugm("built outgoing request", httpReqToMlogMap(nreq))
 	}
 
-	resp, err := p.client.Do(nreq)
+	resp, err := p.client.Do(nreq) // #nosec G704
 
 	if resp != nil {
 		defer func() {
@@ -569,7 +576,7 @@ func New(pc Config) (*Proxy, error) {
 		Timeout: pc.RequestTimeout,
 	}
 
-	acceptTypes := []string{"image/*"}
+	acceptTypes := []string{"image/*", "image/svg+xml"}
 	// add additional accept types, if appropriate
 	if pc.AllowContentVideo {
 		acceptTypes = append(acceptTypes, "video/*")

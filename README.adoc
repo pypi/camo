@@ -11,31 +11,35 @@ ifdef::env-github[]
 endif::[]
 
 // some links
-:link-atmos-camo: https://github.com/atmos/camo[camo]
-:link-hmac: https://en.wikipedia.org/wiki/HMAC[HMAC]
-:link-hsts: https://en.wikipedia.org/wiki/HTTP_Strict_Transport_Security[HSTS]
 :link-asciidoctor: https://asciidoctor.org[asciidoctor]
-:link-damontools: https://cr.yp.to/daemontools.html[daemontools]
-:link-runit: https://en.wikipedia.org/wiki/Runit[runit]
-:link-upstart: https://en.wikipedia.org/wiki/Upstart_(software)[upstart]
-:link-launchd: https://en.wikipedia.org/wiki/Launchd[launchd]
-:link-systemd: https://www.freedesktop.org/wiki/Software/systemd/[systemd]
+:link-atmos-camo: https://github.com/atmos/camo[camo]
+:link-codeberg-mirror: https://codeberg.org/dropwhile/go-camo[codeberg-mirror]
 :link-daemontools-why: https://cr.yp.to/daemontools/faq/create.html#why[daemontools/why]
-:link-heroku-buildpack-go: https://github.com/kr/heroku-buildpack-go
+:link-damontools: https://cr.yp.to/daemontools.html[daemontools]
 :link-dns-rebinding: https://en.wikipedia.org/wiki/DNS_rebinding[dns rebinding]
-:link-ip6-special-addresses: https://en.wikipedia.org/wiki/IPv6_address#Special_addresses
 :link-docker-containers: https://hub.docker.com/r/cactus4docker/go-camo[docker hub]
 :link-github-containers: https://github.com/cactus/go-camo/pkgs/container/go-camo[github packages]
-:link-releases: https://github.com/cactus/go-camo/releases[binary releases]
+:link-heroku-buildpack-go: https://github.com/kr/heroku-buildpack-go
+:link-hmac: https://en.wikipedia.org/wiki/HMAC[HMAC]
+:link-hsts: https://en.wikipedia.org/wiki/HTTP_Strict_Transport_Security[HSTS]
+:link-ip6-special-addresses: https://en.wikipedia.org/wiki/IPv6_address#Special_addresses
+:link-just: https://github.com/casey/just[just]
+:link-launchd: https://en.wikipedia.org/wiki/Launchd[launchd]
+:link-mise: https://mise.jdx.dev[mise]
 :link-mit-license: https://www.opensource.org/licenses/mit-license.php[MIT license]
 :link-mrsaints: https://github.com/MrSaints[MrSaints]
-:link-arachnys-fork: https://github.com/arachnys/go-camo[fork]
+:link-releases: https://github.com/cactus/go-camo/releases[binary releases]
+:link-runit: https://en.wikipedia.org/wiki/Runit[runit]
+:link-scdoc: https://git.sr.ht/~sircmpwn/scdoc/[scdoc]
+:link-smokescreen: https://github.com/stripe/smokescreen[smokescreen]
+:link-systemd: https://www.freedesktop.org/wiki/Software/systemd/[systemd]
+:link-upstart: https://en.wikipedia.org/wiki/Upstart_(software)[upstart]
 
 image:https://img.shields.io/github/release/cactus/go-camo.svg[Current Release,link=http://github.com/cactus/go-camo/releases]
 image:https://img.shields.io/docker/image-size/cactus4docker/go-camo?label=container%20size[Container Image Size (latest by date),link=https://hub.docker.com/r/cactus4docker/go-camo]
 image:https://github.com/cactus/go-camo/workflows/unit-tests/badge.svg[BuildStatus]
-image:.github/img-readme-license.svg[License,link=https://github.com/cactus/go-camo/blob/master/LICENSE.adoc]
-// image:https://circleci.com/gh/cactus/go-camo.svg?style=svg[CircleCI,link=https://circleci.com/gh/cactus/go-camo]
+image:.github/img-readme-license.svg[License,link=https://github.com/cactus/go-camo/blob/master/LICENSE.md]
+image:https://img.shields.io/badge/codeberg-1890ff?label=mirror[mirror:codeberg,link=https://codeberg.org/dropwhile/go-camo]
 
 ifdef::env-github[]
 [discrete]
@@ -142,13 +146,17 @@ Extract, and copy files to desired locations.
 
 == Building
 
-Building requires:
+Required tools:
 
-*   make
 *   posix compatible shell (sh)
 *   git
-*   go (latest version recommended. At least version >= 1.21)
-*   {link-asciidoctor} (for building man pages only)
+*   go (most recent version recommended)
+*   {link-just} (command runner)
+*   {link-scdoc} (for building man pages only)
+
+Optional tools:
+
+*   {link-mise} (tool version manager)
 
 Building:
 
@@ -158,26 +166,14 @@ Building:
 $ git clone git@github.com:cactus/go-camo
 $ cd go-camo
 
-# show make targets
-$ make
-Available targets:
-  help                this help
-  clean               clean up
-  all                 build binaries and man pages
-  check               run checks and validators
-  test                run tests
-  cover               run tests with cover output
-  build               build all binaries
-  man                 build all man pages
-  tar                 build release tarball
-  cross-tar           cross compile and build release tarballs
+# build all binaries (into ./bin/)
+$ just build
 
-# build all binaries (into ./bin/) and man pages (into ./man/)
-# strips debug symbols by default
-$ make all
+# build man pages (into ./man/)
+$ just manpages
 
 # do not strip debug symbols
-$ make all GOBUILD_LDFLAGS=""
+$ env BUILD_LDFLAGS="" just build
 ----
 
 == Running
@@ -265,6 +261,8 @@ More generally, it is recommended to either:
 *   Run a local resolver for go-camo that returns NXDOMAIN responses
     for addresses in deny-listed ranges (e.g. unbound's `private-address` functionality).
     This is also useful to help prevent dns rebinding in general.
+*   Use something like {link-smokescreen} as an upstream proxy to filter outgoing
+    requests (note caveats in <<Upstream Http Proxying>>).
 
 == Configuring
 
@@ -283,42 +281,47 @@ More generally, it is recommended to either:
 [source,text]
 ----
 $ go-camo -h
-Usage: go-camo
+Usage: go-camo [flags]
 
 An image proxy that proxies non-secure images over SSL/TLS
 
 Flags:
   -h, --help                     Show context-sensitive help.
   -k, --key=STRING               HMAC key
-  -H, --header=HEADER,...        Add additional header to each response. This option can
-                                 be used multiple times to add multiple headers.
+  -H, --header=HEADER,...        Add additional header to each response.
+                                 This option can be used multiple times to add
+                                 multiple headers.
       --listen="0.0.0.0:8080"    Address:Port to bind to for HTTP
-      --ssl-listen=STRING        Address:Port to bind to for HTTPS/SSL/TLS
-      --socket-listen=STRING     Path for unix domain socket to bind to for HTTP
-      --quic                     Enable http3/quic. Binds to the same port number as
-                                 ssl-listen but udp+quic.
-      --automaxprocs             Set GOMAXPROCS automatically to match Linux container CPU
-                                 quota/limits.
-      --ssl-key=STRING           ssl private key (key.pem) path
-      --ssl-cert=STRING          ssl cert (cert.pem) path
-      --max-size=INT-64          Max allowed response size (KB)
-      --max-size-redirect        URL to redirect to when max-size is exceeded
+      --ssl-listen=HOST_PORT     Address:Port to bind to for HTTPS/SSL/TLS
+      --socket-listen=PATH       Path for unix domain socket to bind to for HTTP
+      --quic                     Enable http3/quic. Binds to the same port
+                                 number as ssl-listen but udp+quic.
+      --automaxprocs             Set GOMAXPROCS automatically to match Linux
+                                 container CPU quota/limits.
+      --ssl-key=PATH             ssl private key (key.pem) path
+      --ssl-cert=PATH            ssl cert (cert.pem) path
+      --max-size=INT             Max allowed response size (KB)
       --timeout=4s               Upstream request timeout
       --max-redirects=3          Maximum number of redirects to follow
+      --max-size-redirect=URL    redirect to URL when max-size is exceeded
       --metrics                  Enable Prometheus compatible metrics endpoint
-      --no-debug-vars            Disable the /debug/vars/ metrics endpoint. This option has
-                                 no effects when the metrics are not enabled.
+      --no-debug-vars            Disable the /debug/vars/ metrics endpoint.
+                                 This option has no effects when the metrics are
+                                 not enabled.
       --no-log-ts                Do not add a timestamp to logging
+      --prof                     Enable go http profiler endpoint
       --log-json                 Log in JSON format
       --no-fk                    Disable frontend http keep-alive support
       --no-bk                    Disable backend http keep-alive support
       --allow-content-video      Additionally allow 'video/*' content
       --allow-content-audio      Additionally allow 'audio/*' content
       --allow-credential-urls    Allow urls to contain user/pass credentials
-      --filter-ruleset=STRING    Text file containing filtering rules (one per line)
+      --filter-ruleset=PATH      Text file containing filtering rules (one per
+                                 line)
       --server-name="go-camo"    Value to use for the HTTP server field
-      --expose-server-version    Include the server version in the HTTP server response
-                                 header
+      --user-agent="go-camo"     user-agent for outgoing requests
+      --expose-server-version    Include the server version in the HTTP server
+                                 response header
       --enable-xfwd4             Enable x-forwarded-for passthrough/generation
   -v, --verbose                  Show verbose (debug) log level output
   -V, --version                  Print version and exit; specify twice to show
@@ -332,7 +335,7 @@ A few notes about specific flags:
 --
 If a `filter-ruleset` file is defined,
 that file is read and each line is converted into a filter rule.
-See link:man/go-camo-filtering.5.adoc[`go-camo-filtering(5)`]
+See link:man/go-camo-filtering.5.scd[`go-camo-filtering(5)`]
 for more information regarding the format for the filter file itself.
 
 Regarding evaluation: The ruleset is NOT evaluated in-order.
@@ -410,6 +413,19 @@ by default, you could add this to the command line:
 ----
 -H "Strict-Transport-Security: max-age=16070400"
 ----
+--
+
+* `--allow-content-video` and `--allow-content-audio`
++
+--
+By default only `image/*` content-types are accepted and proxied, all other
+content-types are rejected.
+
+Add the `--allow-content-video` argument to addtionally allow `video/*` content
+types.
+
+Add the `--allow-content-audio` argument to addtionally allow `audio/*` content
+types.
 --
 
 == Upstream Http Proxying
@@ -545,9 +561,9 @@ unless you specifically need a container.
 
 == Changelog
 
-See xref:CHANGELOG.adoc[CHANGELOG].
+See xref:CHANGELOG.md[CHANGELOG].
 
 == License
 
 Released under the {link-mit-license}.
-See xref:LICENSE.adoc[LICENSE] file for details.
+See xref:LICENSE.md[LICENSE] file for details.
